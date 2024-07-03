@@ -1,0 +1,83 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        AWS_CREDENTIALS_ID = 'awscredencial'
+    }
+
+    stages {
+        stage('Get Code') {
+            agent {
+                label 'default'
+            }
+            steps {
+                checkout([$class: 'GitSCM', branches: [[name: '*/master']], userRemoteConfigs: [[url: 'https://github.com/nadiabaldz/todo-list-aws']]])
+            }
+        }
+
+        stage('Deploy') {
+            agent {
+                label 'default'
+            }
+             steps {
+               withAWS(credentials: 'awscredencial', region: 'us-east-1') {
+                script {
+                def stackName = 'todo-list-staging'
+                def s3Bucket = 'S3_BUCKET_1D'
+                def capabilities = 'CAPABILITY_IAM'
+                def parameters = 'ParameterKey=Environment,ParameterValue=Staging'
+                
+                 bat 'set SAM_CLI_PYTHON=python3.11'
+               // bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python310\\python.exe -m pip install --upgrade awscli aws-sam-cli'
+                bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe --version'
+                bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe build'
+                bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe validate'
+                bat '''
+                       C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe deploy --stack-name $STACK_NAME \
+                           --s3-bucket $S3_BUCKET \
+                           --capabilities $CAPABILITIES \
+                           --parameter-overrides $PARAMETERS \
+                           --no-confirm-changeset \
+                           --no-fail-on-empty-changeset
+                  '''
+                def apiUrl = sh(script: 'aws cloudformation describe-stacks --stack-name ${stackName} --query "Stacks[0].Outputs[?OutputKey==\'ApiUrl\'].OutputValue" --output text', returnStdout: true).trim()
+                env.API_ENDPOINT = apiUrl
+                }
+               }
+               
+            }
+        }
+
+        stage('Rest Test') {
+            agent {
+                label 'rest-tests'
+            }
+            steps {
+                script {
+                    def apiUrl = env.API_ENDPOINT
+                    def tests = [
+                        [
+                            name: "Listar To-Dos",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos' -Method GET"
+                        ],
+                        [
+                            name: "Obtener To-Do por ID",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos/1' -Method GET"
+                        ],
+                        [
+                            name: "Actualizar To-Do por ID",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos/1' -Method PUT -Body '{\"title\": \"Nuevo título\", \"completed\": true}' -ContentType 'application/json'"
+                        ],
+                        [
+                            name: "Borrar To-Do por ID",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos/1' -Method DELETE"
+                        ]
+                    ]
+                }
+                
+            }
+        }
+    }
+
+}
