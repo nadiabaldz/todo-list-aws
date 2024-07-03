@@ -1,0 +1,102 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Get Code') {
+            
+            steps {
+                script {
+                   
+                    checkout([$class: 'GitSCM',
+                                  branches: [[name: 'develop']],
+                                  userRemoteConfigs: [[url: 'https://github.com/nadiabaldz/todo-list-aws',
+                                                       credentialsId: 'mitoken']]
+                        ])
+                }
+            }
+        }
+        stage('Static Test'){
+                   steps {
+                       dir('src') {
+                          bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\python.exe -m flake8 --max-line-length=120 --statistics'
+                          bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\python.exe -m bandit -r .'
+                           archiveArtifacts artifacts: 'flake8-report.txt, bandit-report.json', allowEmptyArchive: true
+                        }
+                    }
+        } 
+        
+        stage('Deploy') {
+            
+           steps {
+               withAWS(credentials: 'awscredencial', region: 'us-east-1') {
+                script {
+                
+                def stackName = 'todo-list-staging'
+                def s3Bucket = 'S3_BUCKET_1D'
+                def capabilities = 'CAPABILITY_IAM'
+                def parameters = 'ParameterKey=Environment,ParameterValue=Staging'
+                
+                 bat 'set SAM_CLI_PYTHON=python3.11'
+               // bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python310\\python.exe -m pip install --upgrade awscli aws-sam-cli'
+                bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe --version'
+                bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe build'
+                bat 'C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe validate'
+                bat '''
+                       C:\\Users\\Nadia\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\sam.exe deploy --stack-name $STACK_NAME \
+                           --s3-bucket $S3_BUCKET \
+                           --capabilities $CAPABILITIES \
+                           --parameter-overrides $PARAMETERS \
+                           --no-confirm-changeset \
+                           --no-fail-on-empty-changeset
+                  '''
+                def apiUrl = sh(script: 'aws cloudformation describe-stacks --stack-name ${stackName} --query "Stacks[0].Outputs[?OutputKey==\'ApiUrl\'].OutputValue" --output text', returnStdout: true).trim()
+                env.API_ENDPOINT = apiUrl
+                }
+               }
+               
+            }
+        }
+        
+        stage('Rest Test') {
+           //  agent {
+            //    label 'rest-tests'
+            //}
+            steps {
+                script {
+                 //   echo "Ejecutando en el agente: ${hostname}"
+                  //  echo "Usuario actual: ${whoami}"
+                    def apiUrl = env.API_ENDPOINT
+                    def tests = [
+                        [
+                            name: "Listar To-Dos",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos' -Method GET"
+                        ],
+                        [
+                            name: "Obtener To-Do por ID",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos/1' -Method GET"
+                        ],
+                        [
+                            name: "Actualizar To-Do por ID",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos/1' -Method PUT -Body '{\"title\": \"Nuevo título\", \"completed\": true}' -ContentType 'application/json'"
+                        ],
+                        [
+                            name: "Borrar To-Do por ID",
+                            command: "Invoke-WebRequest -Uri '${apiUrl}/todos/1' -Method DELETE"
+                        ]
+                    ]
+                }
+                
+            }
+        }
+        
+        stage('Promote') {
+            
+            steps {
+                 script {
+                    
+                    git branch: 'master', changelog: false, credentialsId: 'mitoken', poll: false, reuseWorkspace: false,  script: 'Merge para produccion.'
+                 }
+            }
+        }
+    }
+}
